@@ -4,9 +4,4 @@ It is a plugin for the music player DeadDBeeF, it adds an entry "Playlist Manage
 
 When using the plug-in for the first time, a directory must be selected with which the playlist is to be synchronized. This directory is saved permanently and does not have to be specified again later, but can be changed at any time with "Select Folder", the option "Reset Folder Tag" is to remove the directory from the settings. 
 
-
-To compile the plugin you need to copy the file deadbeef.h from the deadbeef directory.
-
-Copy the compiled plugin to the plugin folder (`~/.local/lib/deadbeef/`) and restart DeadDBeeF.
-
-
+To compile the plugin you need to copy the file deadbeef.h from the deadbeef directory. After that you can create the plugin using `make`. After successful creation, there are two files named `playlist_manager_gtk2.so` and `playlist_manager_gtk3.so` in the directory. Copy one of the two files, depending on whether you want to use the GTK2 or GTK3 version, into the plugin folder (`~/.local/lib/deadbeef/`) and restart DeadDBeeF.
