@@ -16,9 +16,9 @@
     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
-#include "deadbeef.h"
 #include <gtk/gtk.h>
 #include <sys/stat.h>
+#include "deadbeef.h"
 
 static DB_misc_t plugin;
 static DB_functions_t *deadbeef;
