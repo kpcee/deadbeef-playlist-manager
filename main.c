@@ -16,9 +16,15 @@
     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
+#define _XOPEN_SOURCE 700
+
 #include <gtk/gtk.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <libintl.h>
 #include "deadbeef.h"
+
+#define _(String) gettext(String)
 
 static DB_misc_t plugin;
 static DB_functions_t *deadbeef;
@@ -42,135 +48,113 @@ plugin_stop(void)
     return 0;
 }
 
-
-GSList *
-get_files(const gchar *dir_path)
+static GHashTable *
+get_file_hash_table(const gchar *dir_path)
 {
-
-    GSList *fpaths = NULL;
-    GSList *dirs = NULL;
-    DIR *cdir = NULL;
-    struct dirent *cent = NULL;
-    struct stat cent_stat;
-    gchar *dir_pdup;
-
-    if (dir_path == NULL)
-    {
+    if (!dir_path) {
         return NULL;
     }
 
-    dir_pdup = g_strdup((const gchar *)dir_path);
-    dirs = g_slist_append(dirs, (gpointer)dir_pdup);
-    while (dirs != NULL)
-    {
-        cdir = opendir((const gchar *)dirs->data);
-        if (cdir == NULL)
-        {
-            g_slist_free(dirs);
-            g_slist_free(fpaths);
-            return NULL;
+    GHashTable *file_table = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    GSList *dirs = g_slist_append(NULL, g_strdup(dir_path));
+
+    while (dirs) {
+        gchar *current_dir = dirs->data;
+        DIR *dir = opendir(current_dir);
+
+        if (!dir) {
+            g_free(current_dir);
+            dirs = g_slist_delete_link(dirs, dirs);
+            continue;
         }
-        chdir((const gchar *)dirs->data);
-        while ((cent = readdir(cdir)) != NULL)
-        {
-            lstat(cent->d_name, &cent_stat);
-            if (S_ISDIR(cent_stat.st_mode))
-            {
-                if (g_strcmp0(cent->d_name, ".") == 0 ||
-                    g_strcmp0(cent->d_name, "..") == 0)
-                {
-                    continue;
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            gchar *path = g_build_filename(current_dir, entry->d_name, NULL);
+            struct stat st;
+            if (stat(path, &st) == 0) {
+                if (S_ISDIR(st.st_mode)) {
+                    if (g_strcmp0(entry->d_name, ".") != 0 && g_strcmp0(entry->d_name, "..") != 0) {
+                        dirs = g_slist_append(dirs, path);
+                        path = NULL;
+                    }
+                } else {
+                    const gchar *ext = strrchr(entry->d_name, '.');
+                    if (!ext || (g_strcmp0(ext, ".jpg") != 0 && g_strcmp0(ext, ".jpeg") != 0 && g_strcmp0(ext, ".png") != 0)) {
+                        g_hash_table_add(file_table, path);
+                        path = NULL;
+                    }
                 }
-                dirs = g_slist_append(dirs, g_strconcat((gchar *)dirs->data, "/", cent->d_name, NULL));
             }
-            else
-            {
-                char *dot = strrchr(cent->d_name, '.');
-                if (dot && strcmp(dot, ".jpg") != 0 && strcmp(dot, ".jpeg") != 0 && strcmp(dot, ".png") != 0)
-                    fpaths = g_slist_append(fpaths, g_strconcat((gchar *)dirs->data, "/", cent->d_name, NULL));
-            }
+            g_free(path);
         }
-        g_free(dirs->data);
+
+        closedir(dir);
+        g_free(current_dir);
         dirs = g_slist_delete_link(dirs, dirs);
-        closedir(cdir);
     }
-    return fpaths;
+
+    return file_table;
 }
 
 static int
 Select_Folder(DB_plugin_action_t *action, ddb_action_context_t ctx)
 {
-    (void)(action);
-    (void)(ctx);
+    (void)action;
+    (void)ctx;
 
     ddb_playlist_t *plt = deadbeef->plt_get_curr();
-    if (!plt)
-    {
+    if (!plt) {
         return 0;
     }
 
-    GtkWidget *dlg = gtk_file_chooser_dialog_new("Select folder...", NULL, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL, GTK_STOCK_OPEN, GTK_RESPONSE_OK, NULL);
-    gtk_window_set_transient_for(GTK_WINDOW(dlg), NULL);
-    gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dlg), FALSE);
+    GtkWidget *dlg = gtk_file_chooser_dialog_new(
+        "Select folder...",
+        NULL,
+        GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        _("Cancel"), GTK_RESPONSE_CANCEL,
+        _("Open"), GTK_RESPONSE_OK,
+        NULL);
 
-    deadbeef->pl_lock();
     const char *oldfolder = deadbeef->plt_find_meta(plt, "Sync_Folder");
-    printf("Old Sync folder: %s\n", oldfolder);
-
-    if (oldfolder)
+    if (oldfolder) {
         gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), oldfolder);
+    }
 
     int response = gtk_dialog_run(GTK_DIALOG(dlg));
-
-    if (response == GTK_RESPONSE_OK)
-    {
+    if (response == GTK_RESPONSE_OK) {
         char *folder = gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(dlg));
-        if (folder)
-        {
+        if (folder) {
             deadbeef->plt_replace_meta(plt, "Sync_Folder", folder);
             deadbeef->plt_modified(plt);
-
-            printf("New Sync folder: %s\n", folder);
             g_free(folder);
         }
     }
 
     gtk_widget_destroy(dlg);
     deadbeef->plt_unref(plt);
-    deadbeef->pl_unlock();
-
     return 0;
 }
 
 static int
 Sync_Playlist(DB_plugin_action_t *action, ddb_action_context_t ctx)
 {
-    (void)(action);
-    (void)(ctx);
+    (void)action;
+    (void)ctx;
 
     ddb_playlist_t *plt = deadbeef->plt_get_curr();
-    if (!plt)
-    {
-        return 0;
-    }
-
-    if (deadbeef->plt_add_files_begin(plt, 0) < 0)
-    {
-        deadbeef->plt_unref(plt);
+    if (!plt) {
         return 0;
     }
 
     const char *folder = deadbeef->plt_find_meta(plt, "Sync_Folder");
-    if (!folder)
-    {
+    if (!folder) {
         deadbeef->plt_unref(plt);
-        Select_Folder(NULL, 0);
-        return 0;
+        return Select_Folder(NULL, 0);
     }
 
-    GSList *files = get_files(folder);
-    if (!files)
-    {
+    GHashTable *file_table = get_file_hash_table(folder);
+    if (!file_table) {
         deadbeef->plt_unref(plt);
         return 0;
     }
@@ -178,27 +162,13 @@ Sync_Playlist(DB_plugin_action_t *action, ddb_action_context_t ctx)
     deadbeef->pl_lock();
 
     DB_playItem_t *it = deadbeef->plt_get_first(plt, PL_MAIN);
-    GSList *iterator = NULL;
-
-    while (it)
-    {
+    while (it) {
         DB_playItem_t *next = deadbeef->pl_get_next(it, PL_MAIN);
         const char *uri = deadbeef->pl_find_meta(it, ":URI");
 
-        gboolean vanished_file = TRUE;
-        for (iterator = files; iterator; iterator = iterator->next)
-        {
-            if (strcmp(iterator->data, uri) == 0)
-            {
-                files = g_slist_remove_link(files, iterator);
-                g_slist_free(iterator);
-                vanished_file = FALSE;
-                break;
-            }
-        }
-
-        if (vanished_file)
-        {
+        if (g_hash_table_contains(file_table, uri)) {
+            g_hash_table_remove(file_table, uri);
+        } else {
             deadbeef->plt_remove_item(plt, it);
         }
 
@@ -206,143 +176,125 @@ Sync_Playlist(DB_plugin_action_t *action, ddb_action_context_t ctx)
         it = next;
     }
 
-    if (files)
-    {
-        deadbeef->plt_add_files_begin(plt, 0);
-        for (iterator = files; iterator; iterator = iterator->next)
-        {
-            // printf("Add file: %s\n", iterator->data);
-            deadbeef->plt_add_file2(0, plt, iterator->data, NULL, NULL);
-        }
-
-        g_slist_free(files);
+    GHashTableIter iter;
+    gpointer key;
+    
+    deadbeef->plt_add_files_begin(plt, 0);
+    g_hash_table_iter_init(&iter, file_table);
+    while (g_hash_table_iter_next(&iter, &key, NULL)) {
+        deadbeef->plt_add_file2(0, plt, key, NULL, NULL);
     }
 
+    g_hash_table_destroy(file_table);
     deadbeef->plt_add_files_end(plt, 0);
     deadbeef->pl_unlock();
     deadbeef->plt_modified(plt);
     deadbeef->plt_unref(plt);
-    deadbeef->sendmessage(DB_EV_PLAYLISTCHANGED, 0, DDB_PLAYLIST_CHANGE_CONTENT, 0);
-    deadbeef->pl_save_current ();
 
     return 0;
 }
 
-static int
-Remove_Vanished_Items(DB_plugin_action_t *action, ddb_action_context_t ctx)
+
+static int Remove_Vanished_Items(DB_plugin_action_t *action, ddb_action_context_t ctx)
 {
-    (void)(action);
-    (void)(ctx);
+    (void)action;
+    (void)ctx;
 
     ddb_playlist_t *plt = deadbeef->plt_get_curr();
-    if (!plt)
-    {
+    if (!plt) {
         return 0;
     }
 
     deadbeef->pl_lock();
 
+    GArray *items_to_remove = g_array_new(FALSE, FALSE, sizeof(DB_playItem_t *));
     DB_playItem_t *it = deadbeef->plt_get_first(plt, PL_MAIN);
-    while (it)
-    {
-        DB_playItem_t *next = deadbeef->pl_get_next(it, PL_MAIN);
+    GHashTable *checked_uris = g_hash_table_new(g_str_hash, g_str_equal);
+
+    while (it) {
         const char *uri = deadbeef->pl_find_meta(it, ":URI");
 
-        if (deadbeef->is_local_file(uri))
-        {
-            struct stat buffer;
-
-            if (stat(uri, &buffer) != 0)
-            {
-                deadbeef->plt_remove_item(plt, it);
+        if (deadbeef->is_local_file(uri)) {
+            if (!g_hash_table_contains(checked_uris, uri)) {
+                struct stat buffer;
+                if (stat(uri, &buffer) != 0) {
+                    g_array_append_val(items_to_remove, it);
+                }
+                g_hash_table_add(checked_uris, (gpointer)uri);
             }
         }
 
         deadbeef->pl_item_unref(it);
-        it = next;
+        it = deadbeef->pl_get_next(it, PL_MAIN);
     }
 
+   for (guint i = 0; i < items_to_remove->len; i++) {
+        deadbeef->plt_remove_item(plt, g_array_index(items_to_remove, DB_playItem_t *, i));
+    }
+
+    g_array_free(items_to_remove, TRUE);
+    g_hash_table_destroy(checked_uris);
     deadbeef->pl_unlock();
     deadbeef->plt_modified(plt);
     deadbeef->plt_unref(plt);
-    deadbeef->sendmessage(DB_EV_PLAYLISTCHANGED, 0, DDB_PLAYLIST_CHANGE_CONTENT, 0);
-    deadbeef->pl_save_current ();
-
     return 0;
 }
 
-static int
-Remove_Duplicate_Items(DB_plugin_action_t *action, ddb_action_context_t ctx)
+
+
+static int Remove_Duplicate_Items(DB_plugin_action_t *action, ddb_action_context_t ctx)
 {
-    (void)(action);
-    (void)(ctx);
+    (void)action;
+    (void)ctx;
 
     ddb_playlist_t *plt = deadbeef->plt_get_curr();
-    if (!plt)
-    {
+    if (!plt) {
         return 0;
     }
 
     deadbeef->pl_lock();
 
-    DB_playItem_t *next, *it = deadbeef->plt_get_first(plt, PL_MAIN);
+    GHashTable *seen_uris = g_hash_table_new(g_str_hash, g_str_equal);
+    DB_playItem_t *it = deadbeef->plt_get_first(plt, PL_MAIN);
 
-    while (it)
-    {
+    while (it) {
         const char *uri = deadbeef->pl_find_meta(it, ":URI");
 
-        if (deadbeef->is_local_file(uri))
-        {
-            DB_playItem_t *next2, *it2 = deadbeef->pl_get_next(it, PL_MAIN);
-
-            while (it2)
-            {
-                const char *uri2 = deadbeef->pl_find_meta(it2, ":URI");
-                next2 = deadbeef->pl_get_next(it2, PL_MAIN);
-
-                if (strcmp(uri, uri2) == 0)
-                {
-                    deadbeef->plt_remove_item(plt, it2);
-                }
-
-                deadbeef->pl_item_unref(it2);
-                it2 = next2;
-            }
+        if (g_hash_table_contains(seen_uris, uri)) {
+            DB_playItem_t *to_remove = it; 
+            it = deadbeef->pl_get_next(it, PL_MAIN); 
+            deadbeef->plt_remove_item(plt, to_remove);
+        } else {
+            g_hash_table_insert(seen_uris, (gpointer)uri, NULL);
+            it = deadbeef->pl_get_next(it, PL_MAIN); 
         }
-        next = deadbeef->pl_get_next(it, PL_MAIN);
-
-        deadbeef->pl_item_unref(it);
-        it = next;
     }
 
+    g_hash_table_destroy(seen_uris);
     deadbeef->pl_unlock();
     deadbeef->plt_modified(plt);
     deadbeef->plt_unref(plt);
-    deadbeef->sendmessage(DB_EV_PLAYLISTCHANGED, 0, DDB_PLAYLIST_CHANGE_CONTENT, 0);
-    deadbeef->pl_save_current ();
-
     return 0;
 }
+
+
 
 static int
 Remove_Folder_Tag(DB_plugin_action_t *action, ddb_action_context_t ctx)
 {
-    (void)(action);
-    (void)(ctx);
+    (void)action;
+    (void)ctx;
 
     ddb_playlist_t *plt = deadbeef->plt_get_curr();
-    if (!plt)
-    {
+    if (!plt) {
         return 0;
     }
 
     deadbeef->pl_lock();
 
     DB_metaInfo_t *meta = deadbeef->plt_get_metadata_head(plt);
-    while (meta)
-    {
-        if (strcmp(meta->key, "Sync_Folder") == 0)
-        {
+    while (meta) {
+        if (g_strcmp0(meta->key, "Sync_Folder") == 0) {
             deadbeef->plt_delete_metadata(plt, meta);
             break;
         }
@@ -352,9 +304,6 @@ Remove_Folder_Tag(DB_plugin_action_t *action, ddb_action_context_t ctx)
     deadbeef->pl_unlock();
     deadbeef->plt_modified(plt);
     deadbeef->plt_unref(plt);
-    deadbeef->sendmessage(DB_EV_PLAYLISTCHANGED, 0, DDB_PLAYLIST_CHANGE_CONTENT, 0);
-    deadbeef->pl_save_current ();
-
     return 0;
 }
 
